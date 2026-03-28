@@ -1,0 +1,2 @@
+#define MSG_TYPE_HEARTBEAT 0x01
+

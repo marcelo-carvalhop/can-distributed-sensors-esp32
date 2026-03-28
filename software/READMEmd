@@ -1,0 +1,3 @@
+Each sensor node uses the same firmware.
+Only the SENSOR_ID constant must be changed.
+

@@ -1,0 +1,4 @@
+#define CAN_ID_HEARTBEAT 0x100
+#define CAN_ID_SENSOR_1 0x201
+#define CAN_ID_SENSOR_2 0x202
+#define CAN_ID_SENSOR_3 0x203
