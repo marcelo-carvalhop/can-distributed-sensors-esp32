@@ -1,222 +1,217 @@
-
 # Distributed Sensor Network using CAN and ESP32
 
-This project implements a **distributed embedded system** composed of four
-ESP32 nodes interconnected via a **CAN bus**. The system simulates a
-distributed sensor network coordinated by a gateway using **logical clock
-synchronization (heartbeat)** and **message-based time slots (TDMA logic)**.
+This repository contains the implementation of a **distributed embedded system**
+based on multiple ESP32 nodes connected through a **CAN (Controller Area Network) bus**.
+The project focuses on coordination, synchronization, and distributed decision-making,
+following classic principles of **Distributed Computing**.
 
-The project was originally developed for an academic context and later refined
-with clean architecture and documentation for portfolio use.
+The system was developed as part of an academic assignment and organized with
+production-quality structure to also serve as a technical portfolio project.
 
 ---
 
-## System Overview
+## Overview
 
-The system consists of **four physical ESP32 nodes**:
+The system is composed of **four ESP32 nodes** connected to a shared CAN bus.
+All nodes execute the **same firmware**, differing only by a local logical identifier.
 
-- **1 Gateway node**
-- **3 Sensor nodes**
+There is no fixed master or gateway node.  
+Instead, a **leader is elected dynamically** at runtime using a distributed algorithm.
+The elected leader becomes responsible for coordinating the system.
 
-All nodes are connected to the same CAN bus using MCP2515 controllers
-(crystal 8 MHz) and TJA1050 transceivers.
+---
+
+## Distributed Architecture
 
 ### Node Roles
 
-- **Gateway**
-  - Broadcasts periodic heartbeat messages
-  - Provides a global logical clock
-  - Receives sensor data
-  - Sends high-priority control commands (enable/disable sensors)
+Each node may assume one of the following roles during execution:
 
-- **Sensors**
-  - Receive heartbeat messages
-  - Synchronize transmissions using TDMA logic
-  - Share a single CAN ID for data
-  - Are uniquely identified via payload fields
-  - Can be remotely enabled or disabled by the gateway
+- **Leader**
+  - Generates the global logical clock (heartbeat)
+  - Coordinates communication timing
+  - Issues administrative control commands
+
+- **Follower**
+  - Synchronizes using the heartbeat
+  - Transmits data only in its assigned time slot
+
+- **Election State**
+  - Temporary state during leader election
+
+Roles are **not fixed** and emerge dynamically at runtime.
+
+---
+
+## Implemented Distributed Computing Requirements
+
+This project explicitly implements the following requirements from the course specification:
+
+### 1. Logical Clock Synchronization ✅
+
+- A **logical clock** is implemented using a periodic **heartbeat message**
+  generated exclusively by the elected leader.
+- All nodes synchronize their actions based on this logical time.
+- No physical clock synchronization is used.
+
+### 2. Leader Election ✅
+
+- A **distributed leader election algorithm** is implemented.
+- All nodes execute the same election logic.
+- The leader is selected dynamically based on node identifiers.
+- Leadership is observable both via serial logs and physical LEDs.
+
+These two mechanisms are independent but **integrated**:
+the elected leader becomes the unique source of the logical clock.
 
 ---
 
 ## Communication Model
 
-### Logical Clock Synchronization
+### CAN Bus
 
-The gateway periodically broadcasts a **heartbeat message**, which contains:
+- Communication uses a shared CAN bus (broadcast model).
+- All nodes receive all messages.
+- Message priority is enforced using CAN identifiers.
 
-- A logical time counter (`tick`)
-- The total number of sensors in the system
+### Message Categories
 
-Each sensor uses this logical clock to determine when it is allowed to transmit.
-
-This approach avoids reliance on physical clocks or delays and implements
-synchronization **entirely through message exchange**, a key concept in
-distributed systems.
+- Leader election messages
+- Leader announcement messages
+- Heartbeat messages (logical clock)
+- Sensor data messages (TDMA coordinated)
+- Administrative control commands
 
 ---
 
-### TDMA-Based Transmission (Logical Time Division)
+## TDMA-Based Coordination
 
-Sensor data transmission follows a **logical TDMA scheme**, defined as:
+Sensor data transmission follows a **logical TDMA scheme**:
 
-sensor transmits when: (heartbeat_tick % total_sensors) == sensor_slot
-
+node transmits when:
+(heartbeat_tick % total_nodes) == node_slot
 Where:
-- `sensor_slot = SENSOR_ID - 1`
+- `node_slot = NODE_ID - 1`
 
 This guarantees:
-- Only one sensor transmits per heartbeat
-- No collisions at the application level
-- Easy scalability (adding sensors does not require protocol changes)
+- Deterministic communication
+- One transmission per time slot
+- Logical exclusion without relying on CAN arbitration alone
 
 ---
 
-## CAN Protocol Design
+## Administrative Control
 
-### CAN Identifiers and Priorities
+An administrative command interface is implemented:
 
-CAN arbitration is used to enforce **real-time priority**:
+22 10 <NODE_ID> 00  -> enable node
+22 10 <NODE_ID> 11  -> disable node
 
-| Message Type        | CAN ID  | Priority |
-|--------------------|---------|----------|
-| Control Command    | 0x080   | Highest  |
-| Heartbeat          | 0x100   | Medium   |
-| Sensor Data        | 0x200   | Lowest   |
-
-Lower CAN IDs have higher priority on the bus.
+- Only the **leader node** may issue administrative commands.
+- Disabled nodes remain synchronized but do not transmit data.
+- Control logic is isolated in a dedicated module for easy expansion.
 
 ---
 
-### Message Types
+## Human–Machine Interface (HMI)
 
-#### Heartbeat (Gateway → All)
+Each node provides local visual feedback via LEDs:
 
-- CAN ID: `0x100`
-- Sent periodically
-- Defines the logical clock
+| LED Color  | Meaning |
+|-----------|--------|
+| Blue      | Node is the current leader |
+| Yellow   | Node activity (system alive) |
+| Red      | Reserved for fault indication (future work) |
 
-Payload:
-- Type
-- Tick value
-- Total number of sensors
-
----
-
-#### Sensor Data (Sensors → Gateway)
-
-- CAN ID: `0x200` (shared by all sensors)
-
-Payload includes:
-- Sensor ID
-- Heartbeat tick
-- Generic payload field (placeholder for future measurements)
-- Sensor status (enabled/disabled)
+This allows observing system behavior without a computer.
 
 ---
 
-#### Control Command (Gateway → Sensors)
+## Serial Observability
 
-- CAN ID: `0x080` (highest priority)
+Every node logs all relevant events over the serial interface,
+including:
 
-Used to remotely enable or disable individual sensors.
+- Leader election
+- Heartbeat generation
+- Data transmission (TX)
+- Data reception from other nodes (RX)
+- Administrative commands
 
-Format:
-
-[opcode] [subcommand] [sensor_id] [action]
-
-Where:
-- `action = 0x00` → enable
-- `action = 0x11` → disable
-
----
-
-## Serial Control Interface (Gateway)
-
-The gateway provides a simple human interface via Serial input.
-
-Command format:
-
-22 10 <sensor_id> 00   // enable sensor
-22 10 <sensor_id> 11   // disable sensor
-
-The serial parser is **non-blocking**, ensuring that gateway operation and
-heartbeat emission are never interrupted by user input.
+Any node connected to a computer can act as a **global observer**
+of the distributed system.
 
 ---
 
-## Hardware
+## Repository Structure
 
-Each node consists of:
-
-- ESP32 DevKit (or compatible)
-- MCP2515 CAN controller (8 MHz crystal)
-- TJA1050 CAN transceiver
-- Shared CAN bus with proper termination
-
-All nodes use the same electrical topology.
-
----
-
-## Project Structure
-
-software/
-├── common/
-│   ├── can_ids.h
-│   └── protocol.h
+can-distributed-sensors-esp32/
 │
-├── gateway/
-│   └── gateway_can/
-│       └── gateway_can.ino
+├── README.md
+├── LICENSE
 │
-└── sensor/
-└── sensor_can/
-└── sensor_can.ino
+├── docs/
+│   ├── relatorio/
+│   │   └── entrega1.pdf
+│   └── especificacao-protocolo.md
+│
+├── hardware/
+│   ├── esquema-conexao.md
+│   └── componentes.md
+│
+├── software/
+│   └── node/
+│       ├── geral_v1.ino
+│       ├── comandos.h
+│       ├── comandos.cpp
+│       ├── node_types.h
+│       ├── node_config.h
+│       ├── can_ids.h
+│       └── protocolo.h
+│
+└── .gitignore
 
-The `common/` directory centralizes protocol definitions and CAN identifiers,
-ensuring consistency across all nodes.
+
+---
+
+## Firmware Notes
+
+- All ESP32 boards use the **same firmware**.
+- Only `NODE_ID` must be changed per device.
+- CAN controller: MCP2515 (8 MHz)
+- CAN bitrate: 500 kbps
 
 ---
 
 ## Academic Context
 
-This project was developed as part of a **Distributed Computing** course,
-addressing key concepts such as:
+This project was developed for the **Distributed Computing** course and
+addresses key distributed systems concepts such as:
 
-- Logical clock synchronization
-- Distributed coordination by message exchange
-- Deterministic behavior without shared memory
-- Communication via an industrial field bus (CAN)
+- Logical time
+- Distributed coordination
+- Leader election
+- Message-based synchronization
+- Decentralized control
 
-The system was intentionally designed to be extensible, serving as a foundation
-for future features such as fault detection, acknowledgments, and leader
-election.
-
----
-
-## Current Status
-
-✅ Logical clock synchronization implemented  
-✅ TDMA-based coordinated transmission  
-✅ Unified CAN ID for sensors  
-✅ Priority-based control commands  
-✅ Non-blocking gateway operation  
+The design is intentionally extensible to support fault detection and recovery
+in future iterations.
 
 ---
 
-## Future Extensions
+## Future Work
 
-Planned or possible extensions include:
+Planned extensions include:
 
-- Heartbeat timeout and fault detection
-- Command acknowledgment (ACK)
-- Sensor data payload expansion (e.g., temperature)
-- Gateway redundancy and leader election
-- Performance analysis under load
+- Leader failure detection and re-election
+- Heartbeat timeout handling
+- Explicit acknowledgment (ACK/NACK) mechanisms
+- Real sensor data integration
+- Web-based monitoring and control
 
 ---
 
 ## License
 
 This project is released under the MIT License.
-
 
